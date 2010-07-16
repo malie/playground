@@ -1,2 +1,2 @@
-javascript-mixins
-a javascript object system, supporting mixins and super
+mix.js, a javascript object system, supporting classes, mixins and super.
+run it on the v8 javascript engine with `d8 development.js mix.js'
