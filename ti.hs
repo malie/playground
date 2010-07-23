@@ -3,6 +3,7 @@ import Data.Generics
 import Data.Generics.Uniplate.Data
 import Control.Monad.State.Lazy
 import Text.PrettyPrint
+import Data.List
 
 class Pretty a where
     pretty :: a -> Doc
@@ -25,7 +26,7 @@ data Expr t
 instance Pretty t => Pretty (Expr t) where
     pretty (SLiteral l) = parens $ sep [text "SLiteral", pretty l]
     pretty (SVar nm) = parens $ sep [text "SVar", quotes $ text nm]
-    pretty (SLambda nm b) = parens $ sep [text "SLambda", text nm, nest 2 $ pretty b]
+    pretty (SLambda nm b) = parens $ sep [text "SLambda" <+> text nm, nest 2 $ pretty b]
     pretty (SApply f a) = parens $ sep [text "SApply", pretty f, nest 2 $ pretty a]
 
 type Primitive = String
@@ -70,7 +71,7 @@ data TIExpr
       deriving (Data, Typeable)
 
 instance Pretty TIExpr where
-    pretty (TIType e t) = parens $ sep [pretty e, text "`TIType`", pretty t]
+    pretty (TIType e t) = parens $ sep [pretty e, sep [text "`TIType`", pretty t]]
     pretty (TITypeUnknown e) = parens $ sep [text "TITypeUnknown", pretty e]
 
 
@@ -101,6 +102,21 @@ numerate e = fst $ runState (num [] e) 0
                    put $ n+1
                    return n
 
+type Cstnt = (Type, Type)
+instance Pretty Cstnt where
+    pretty (a,b) = parens $ sep [pretty a <+> text ",", pretty b]
+instance Pretty [Cstnt] where
+    pretty l = brackets $ nest 2 $ sep $ intersperse comma $ map pretty l
+
+
+constraints :: TIExpr -> [Cstnt]
+constraints = para f
+    where c a b = a : concat b
+          f :: TIExpr -> [[Cstnt]] -> [Cstnt]
+          f (TIType (SLiteral (VInteger _)) t@(TVar _)) = c (t, TInteger)
+          f (TIType (SLiteral (VBoolean _)) t@(TVar _)) = c (t, TBoolean)
+          f _ = concat
+
 p1, p2, p3 :: SE
 (p1, p2, p3) =
     let i = SE . SLiteral . VInteger
@@ -109,7 +125,7 @@ p1, p2, p3 :: SE
         v = SE . SVar
         l nm b = SE (SLambda nm b)
     in ( i 234
-       , a2 (v "sum") (i 3) (i 4)
+       , l "s" (a2 (v "s") (i 3) (i 4))
        , l "f" (l "x" (a2 (v "f") (v "x") (v "x")))
        )
 
@@ -119,9 +135,11 @@ p1, p2, p3 :: SE
 -- fold
 
 main = do
-  let et = enterType p3
+  let et = enterType p2
   pprint et
   let o = numerate et
   pprint o
+  let c = constraints o
+  pprint c
 
 
