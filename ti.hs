@@ -1,6 +1,6 @@
 {-# OPTIONS_GHC -fglasgow-exts #-}
 import Data.Generics
-import Data.Generics.Uniplate.Data
+import qualified Data.Generics.Uniplate.Data as Uniplate
 import Control.Monad.State.Lazy
 import Text.PrettyPrint
 import Data.List
@@ -110,7 +110,7 @@ numerate e = fst $ runState (num [] e) 0
               case lookup nm primitives of
                 Just t -> return $ TIType t p
           num env (TITypeUnknown x) =
-              do x' <- descendBiM (num env) x
+              do x' <- Uniplate.descendBiM (num env) x
                  n <- gen
                  return $ TIType (TVar n) x'
           gen = do n <- get
@@ -126,7 +126,7 @@ instance Pretty [Cstnt] where  -- why?
     pretty l = brackets $ nest 2 $ sep $ map (<> comma) $ map pretty l
 
 constraints :: TIExpr -> [Cstnt]
-constraints = para f
+constraints = Uniplate.para f
     where c a b = a : concat b
           cs a b = concat (a:b)
           f :: TIExpr -> [[Cstnt]] -> [Cstnt]
@@ -134,7 +134,7 @@ constraints = para f
           f (TIType t (SLiteral (VBoolean _))) = c (t, TBoolean)
           f (TIType t (SApply (TIType tf _) (TIType ta _))) = c (tf, TFun ta t)
           f _ = concat
- 
+
 
 
 p1, p2, p3, p4 :: SE
