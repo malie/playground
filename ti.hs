@@ -26,8 +26,10 @@ data Expr t
 instance Pretty t => Pretty (Expr t) where
     pretty (SLiteral l) = parens $ sep [text "SLiteral", pretty l]
     pretty (SVar nm) = parens $ sep [text "SVar", quotes $ text nm]
-    pretty (SLambda nm b) = parens $ sep [text "SLambda" <+> text nm, nest 2 $ pretty b]
-    pretty (SApply f a) = parens $ sep [text "SApply", pretty f, nest 2 $ pretty a]
+    pretty (SLambda nm b) = parens $ sep [text "SLambda" <+> text nm, nest 3 $ pretty b]
+    pretty (SApply f a) = parens $ sep [text "SApply", pretty f, nest 3 $ pretty a]
+    pretty (SLet vs b) = undefined
+    pretty (SPrim nm) = parens $ text "SPrim" <+> text nm
 
 type Primitive = String
 
@@ -38,6 +40,7 @@ data Type
     | TBoolean
     | TFun Type Type
     | TVar Integer
+    | TPrim String
       deriving (Data, Typeable)
 
 instance Pretty Type where
@@ -45,6 +48,7 @@ instance Pretty Type where
     pretty TBoolean = text "TBoolean"
     pretty (TFun f a) = parens $ sep [pretty f, text "`TFun`", pretty a]
     pretty (TVar n) = text $ "TVar " ++ show n
+    pretty (TPrim nm) = text $ "TPrim " ++ nm
 
 
 data Value
@@ -66,14 +70,22 @@ instance Pretty SE where
 
 
 data TIExpr
-    = TIType (Expr TIExpr) Type 
+    = TIType Type (Expr TIExpr)
     | TITypeUnknown (Expr TIExpr)
       deriving (Data, Typeable)
 
 instance Pretty TIExpr where
-    pretty (TIType e t) = parens $ sep [pretty e, sep [text "`TIType`", pretty t]]
+    pretty (TIType t e) = sep [pretty e, nest 1 $ sep [text "::", pretty t]]
     pretty (TITypeUnknown e) = parens $ sep [text "TITypeUnknown", pretty e]
 
+
+primitives :: [(Primitive, Type)]
+primitives =
+    let int = TPrim "int"
+    in
+      [
+       ("intAdd", TFun int (TFun int int))
+      ]
 
 enterType :: SE -> TIExpr
 enterType (SE (SLambda nm a)) = TITypeUnknown (SLambda nm (enterType a))
@@ -88,45 +100,55 @@ numerate e = fst $ runState (num [] e) 0
     where num env (TITypeUnknown (SLambda nm b)) =
               do n <- gen
                  let nmt = TVar n
-                 b'@(TIType _ bt) <- num ((nm, nmt):env) b
-                 return (TIType (SLambda nm b') (TFun nmt bt))
+                 b'@(TIType bt _) <- num ((nm, nmt):env) b
+                 return (TIType (TFun nmt bt) (SLambda nm b'))
           num env (TITypeUnknown x@(SVar nm)) =
               case lookup nm env of
-                Just t -> return $ TIType x t
-                Nothing -> error $ "free var: " ++ nm
+                Just t -> return $ TIType t x
+                Nothing -> error $ "unknown free var: " ++ nm
+          num env (TITypeUnknown p@(SPrim nm)) =
+              case lookup nm primitives of
+                Just t -> return $ TIType t p
           num env (TITypeUnknown x) =
               do x' <- descendBiM (num env) x
                  n <- gen
-                 return $ TIType x' (TVar n)
+                 return $ TIType (TVar n) x'
           gen = do n <- get
                    put $ n+1
                    return n
 
+
 type Cstnt = (Type, Type)
 instance Pretty Cstnt where
-    pretty (a,b) = parens $ sep [pretty a <+> text ",", pretty b]
-instance Pretty [Cstnt] where
-    pretty l = brackets $ nest 2 $ sep $ intersperse comma $ map pretty l
+    pretty (a,b) = sep [pretty a, text "=" <+> pretty b]
 
+instance Pretty [Cstnt] where  -- why?
+    pretty l = brackets $ nest 2 $ sep $ map (<> comma) $ map pretty l
 
 constraints :: TIExpr -> [Cstnt]
 constraints = para f
     where c a b = a : concat b
+          cs a b = concat (a:b)
           f :: TIExpr -> [[Cstnt]] -> [Cstnt]
-          f (TIType (SLiteral (VInteger _)) t@(TVar _)) = c (t, TInteger)
-          f (TIType (SLiteral (VBoolean _)) t@(TVar _)) = c (t, TBoolean)
+          f (TIType t (SLiteral (VInteger _))) = c (t, TInteger)
+          f (TIType t (SLiteral (VBoolean _))) = c (t, TBoolean)
+          f (TIType t (SApply (TIType tf _) (TIType ta _))) = c (tf, TFun ta t)
           f _ = concat
+ 
 
-p1, p2, p3 :: SE
-(p1, p2, p3) =
+
+p1, p2, p3, p4 :: SE
+(p1, p2, p3, p4) =
     let i = SE . SLiteral . VInteger
         a f x = SE (SApply f x)
         a2 f x y = a (a f x) y
         v = SE . SVar
-        l nm b = SE (SLambda nm b)
+        fn nm b = SE (SLambda nm b)
+        p = SE . SPrim 
     in ( i 234
-       , l "s" (a2 (v "s") (i 3) (i 4))
-       , l "f" (l "x" (a2 (v "f") (v "x") (v "x")))
+       , a2 (v "sum") (i 3) (i 4)
+       , fn "f" (fn "x" (a2 (v "f") (v "x") (v "x")))
+       , fn "f" (fn "a" (a2 (p "intAdd") (v "a") (v "a")))
        )
 
 -- f g a b = g a b
@@ -135,7 +157,7 @@ p1, p2, p3 :: SE
 -- fold
 
 main = do
-  let et = enterType p2
+  let et = enterType p4
   pprint et
   let o = numerate et
   pprint o
