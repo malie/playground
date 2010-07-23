@@ -41,12 +41,12 @@ data Type
     | TFun Type Type
     | TVar Integer
     | TPrim String
-      deriving (Data, Typeable)
+      deriving (Eq, Data, Typeable)
 
 instance Pretty Type where
     pretty TInteger = text "TInteger"
     pretty TBoolean = text "TBoolean"
-    pretty (TFun f a) = parens $ sep [pretty f, text "`TFun`", pretty a]
+    pretty (TFun f a) = parens $ sep [pretty f, text "->", pretty a]
     pretty (TVar n) = text $ "TVar " ++ show n
     pretty (TPrim nm) = text $ "TPrim " ++ nm
 
@@ -118,22 +118,44 @@ numerate e = fst $ runState (num [] e) 0
                    return n
 
 
-type Cstnt = (Type, Type)
-instance Pretty Cstnt where
+type Constraint = (Type, Type)
+instance Pretty Constraint where
     pretty (a,b) = sep [pretty a, text "=" <+> pretty b]
 
-instance Pretty [Cstnt] where  -- why?
+instance Pretty [Constraint] where  -- why?
     pretty l = brackets $ nest 2 $ sep $ map (<> comma) $ map pretty l
 
-constraints :: TIExpr -> [Cstnt]
+constraints :: TIExpr -> [Constraint]
 constraints = Uniplate.para f
     where c a b = a : concat b
           cs a b = concat (a:b)
-          f :: TIExpr -> [[Cstnt]] -> [Cstnt]
+          f :: TIExpr -> [[Constraint]] -> [Constraint]
           f (TIType t (SLiteral (VInteger _))) = c (t, TInteger)
           f (TIType t (SLiteral (VBoolean _))) = c (t, TBoolean)
           f (TIType t (SApply (TIType tf _) (TIType ta _))) = c (tf, TFun ta t)
           f _ = concat
+
+
+
+solve :: [Constraint] -> [Constraint]
+solve cs = rec cs []
+    where rec :: [Constraint] -> [Constraint] -> [Constraint]
+          rec [] subst = subst
+          rec ((a, b):cs) subst =
+              case (a==b, varLeft a b, a, b) of
+                (True, _, _, _)
+                    -> rec cs subst
+                (_, (u@(TVar _), r), _, _)
+                    -> let substAll = Uniplate.transformBi $ substitute u r
+                       in rec (substAll cs) $ (u,r) : substAll subst
+                (_, _, TFun rf ra, TFun sf sa)
+                    -> rec ((rf,sf):(ra,sa):cs) subst
+          varLeft a b@(TVar _) = (b,a)
+          varLeft a b          = (a,b)
+          substitute :: Type -> Type -> Type -> Type
+          substitute (TVar u) r (TVar v) | u == v = r
+          substitute _ _ x                        = x
+
 
 
 
@@ -146,9 +168,9 @@ p1, p2, p3, p4 :: SE
         fn nm b = SE (SLambda nm b)
         p = SE . SPrim 
     in ( i 234
-       , a2 (v "sum") (i 3) (i 4)
        , fn "f" (fn "x" (a2 (v "f") (v "x") (v "x")))
        , fn "f" (fn "a" (a2 (p "intAdd") (v "a") (v "a")))
+       , undefined
        )
 
 -- f g a b = g a b
@@ -157,11 +179,12 @@ p1, p2, p3, p4 :: SE
 -- fold
 
 main = do
-  let et = enterType p4
-  pprint et
+  let et = enterType p3
   let o = numerate et
   pprint o
   let c = constraints o
   pprint c
+  let r = solve c
+  pprint r
 
 
