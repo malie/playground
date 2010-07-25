@@ -136,7 +136,7 @@ constraints = Uniplate.para f
           f _ = concat
 
 
-
+-- plai p.280
 solve :: [Constraint] -> [Constraint]
 solve cs = rec cs []
     where rec :: [Constraint] -> [Constraint] -> [Constraint]
@@ -159,27 +159,29 @@ solve cs = rec cs []
 
 
 
-p1, p2, p3, p4 :: SE
+p1, p2, p3, p4 :: S
 (p1, p2, p3, p4) =
     let i = SE . SLiteral . VInteger
         a f x = SE (SApply f x)
         a2 f x y = a (a f x) y
         v = SE . SVar
         fn nm b = SE (SLambda nm b)
-        p = SE . SPrim 
+        p = SE . SPrim
     in ( i 234
        , fn "f" (fn "x" (a2 (v "f") (v "x") (v "x")))
        , fn "f" (fn "a" (a2 (p "intAdd") (v "a") (v "a")))
-       , undefined
+       , fn "g" (fn "a" (fn "b"
+           (a2 (v "g")
+               (v "a")
+               (a2 (v "g") (v "a") (v "b")))))
        )
 
--- f g a b = g a b
--- f g a b = g a (g b)
+-- f g a b = g a (g a b)
 -- map
 -- fold
 
 main = do
-  let et = enterType p3
+  let et = enterType p4
   let o = numerate et
   pprint o
   let c = constraints o
