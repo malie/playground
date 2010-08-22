@@ -1,8 +1,8 @@
 {-# LANGUAGE FlexibleInstances #-}
 module Memo1.Tests where
 
--- import Data.List(sort)
-import Debug.Trace
+import Data.List(sort)
+-- import Debug.Trace
 import Memo1
 import System.Environment(getArgs)
 import Test.QuickCheck
@@ -20,7 +20,8 @@ qc t args = quickCheckWith args t
 tests =
     [ qc testComposition1,
       qc testComposition2,
-      -- qc $ eq1 tsortApply sort,
+      qc (\x-> let a = x ++ [123] in tsortApply a == sort a),
+      qc $ eq1 apply1 elems,
       qc $ eq12 apply1 reapply2
     ]
 
@@ -65,15 +66,31 @@ testComposition2 x ys =
 
 
 
-{-
-tsortApply :: [Integer] -> [Integer]
-tsortApply xs = head $ fst $ apply (Fold2 merge) (elems xs)
 
-merge :: (Ord a, Show a) => [a] -> [a] -> Maybe [a]
-merge (xs, ys) | trace ("merge " ++ show xs ++ " " ++ show ys) False = undefined
+tsortApply :: [Integer] -> [Integer]
+-- tsortApply xs | trace ("tsortApply " ++ show xs) False = undefined
+tsortApply xs = 
+    let mer = if length xs > 10 then bmerge else merge
+    in flatten $ result $ apply (Fold2 mer) (elems xs)
+
+flatten [a] = a
+flatten [] = []
+flatten _ = undefined
+
+-- some arbitrary case is refused. testcase data generation ensures element 1 has right neigbours,
+-- with which it can be later merged
+bmerge (_, [1]) = -- trace ("bmerge refused " ++ show xs ++ " " ++ show [1])
+                      Nothing
+bmerge x = merge x
+
+
+merge :: (Num a, Ord a, Show a) => ([a], [a]) -> Maybe [a]
+--merge (xs, ys) | trace ("merge " ++ show xs ++ " " ++ show ys) False = undefined
 merge (xs, ys) = Just (rec xs ys)
-    where rec (x:xs) (y:ys) = case compare x y of
-                                LT -> x : rec xs (y:ys)
-                                EQ -> x : y : rec xs ys
-                                GT -> y : rec (x:xs) ys
--}
+    where rec [] ys' = ys'
+          rec xs' [] = xs'
+          rec (x:xs') (y:ys') = case compare x y of
+                                  LT -> x : rec xs' (y:ys')
+                                  EQ -> x : y : rec xs' ys'
+                                  GT -> y : rec (x:xs') ys'
+

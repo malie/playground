@@ -121,60 +121,50 @@ instance (Eq a) => Memo1 (Map a b) where
 
 -- If function returns Just, both inputs get replaced by the result. If Nothing
 -- both inputs get reapplied to their other respective neighbours.
-{-
 data Fold2 a = Fold2 ((a, a) -> Maybe a)
 data F2 a = F2 [a] [a] [F2 a]
 instance (Eq a) => Memo1 (Fold2 a) where
     type Arg (Fold2 a) = [a]
     type Res (Fold2 a) = [a]
-    data Cache (Fold2 a) = CacheFold2 (F2 a)
-    apply (Fold2 f) as = rec as
+    data Cache (Fold2 a) = CacheFold2 ((a, a) -> Maybe a) (F2 a)
+    apply (Fold2 f) as = CacheFold2 f (rec as)
         where rec as = let (res, subs) =
                                case as of
                                  [] -> ([], [])
                                  [a] -> ([a], [])
-                                 _ -> let (l,r) = halves as
+                                 _ -> let (l,r) = splitMid as
                                           (tl, tr) = (rec l, rec r)
-                                      in ( applr f (results tl) (results tr)
+                                      in ( applr f (rs tl) (rs tr)
                                          , [tl, tr] )
-                  CacheFold2 (F2 as res subs)
-              results (F2 _ r _) = r
+                       in F2 as res subs
+              rs (F2 _ r _) = r
 
         -- ganze liste als root des trees
         -- beim reapply testen, ob alles gleich, wenn ja, cache result
         -- wenn nicht, zwei teile bilden, nur die geaenderten teile neu bearbeiten
 
     reapply = undefined
-    argument (CacheFold2 (F2 a _ _)) = a
-    result (CacheFold2 (F2 _ r _)) = r
+    argument (CacheFold2 _ (F2 a _ _)) = a
+    result (CacheFold2 _ (F2 _ r _)) = r
 
 -- apply f via a specialized list zipper
-applr :: (a -> a -> Maybe a) -> [a] -> [a] -> [a]
+applr :: ((a, a) -> Maybe a) -> [a] -> [a] -> [a]
 applr f as bs = let (x:ras) = reverse as
-                in r1 ras x bs
-    where l (a:as) x bs = case f a x of
+                in r ras x bs
+    where l (a:as) x bs = case f (a, x) of
                             Just x' -> l as x' bs
                             Nothing -> r (a:as) x bs
           l [] x bs = r [] x bs
-          l1 (a:as) x bs = case f a x of
-                             Just x' -> l as x' bs
-                             Nothing -> reverse as ++ a : x : bs
-          l1 [] x bs = r [] x bs
-          r as x (b:bs) = case f x b of
+          r as x (b:bs) = case f (x, b) of
                             Just x' -> l as x' bs
                             Nothing -> reverse as ++ x : b : bs
           r as x [] = reverse as ++ [x]
-          r1 as x (b:bs) = case f x b of
-                             Just x' -> l as x' bs
-                             Nothing -> reverse as ++ x : b : bs
-          r1 as x [] = reverse as ++ [x]
 
-halves :: [a] -> ([a], [a])
-halves [] = ([], [])
-halves [x] = ([x], [])
-halves xs = let (a,b) = splitAt (length xs `div` 2) xs
+splitMid :: [a] -> ([a], [a])
+splitMid [] = ([], [])
+splitMid [x] = ([x], [])
+splitMid xs = let (a,b) = splitAt (length xs `div` 2) xs
                  in (a,b)
--}
 
 
 data Fold3 a = Fold3 (a -> a -> a -> Maybe a)
