@@ -2,12 +2,11 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE GADTs #-}
 
 {- Markus Liedl 2010-08-16 -}
 
 module Memo1 where
-
-import Debug.Trace
 
 class Memo1 f where
     type Arg f
@@ -31,24 +30,27 @@ instance (Eq a) => Memo1 (a->b) where
     argument (CacheFun _ a _) = a
     result (CacheFun _ _ b) = b
 
-data Comp a b c = Comp (b->c) (a->b) 
-instance (Eq a, Eq b) => Memo1 (Comp a b c) where
-    type Arg (Comp a b c) = a
-    type Res (Comp a b c) = c
-    data Cache (Comp a b c) = CacheComp (Cache (b->c)) (Cache (a->b))
-    apply (Comp f g) a =
-        let (b, gw) = apply g a
-            (c, fw) = apply f b
-        in (c, CacheComp fw gw)
-    reapply cc@(CacheComp fw gw) a' =
-        if argument gw == a'
-        then (result fw, cc)
-        else let (b, gw') = reapply gw a'
-                 (c, fw') = reapply fw b
-             in (c, CacheComp fw gw)
-    argument (CacheComp _ ab) = argument ab
-    result (CacheComp bc _) = result bc
+data Comp a b where
+    Comp :: (Memo1 a, Memo1 b, Arg a ~ Res b)
+            => a -> b -> Comp a b
 
+instance (Memo1 a, Memo1 b, Eq (Arg a), Eq (Arg b), Arg a ~ Res b)
+    => Memo1 (Comp a b) where
+    type Arg (Comp a b) = Arg b
+    type Res (Comp a b) = Res a
+    data Cache (Comp a b) = CacheComp (Cache a) (Cache b)
+    apply (Comp n m) x =
+        let (y, cm) = apply m x
+            (z, cn) = apply n y
+        in (z, CacheComp cn cm)
+    reapply cc@(CacheComp cn cm) x =
+        if argument cm == x
+        then (result cn, cc)
+        else let (y, cm') = reapply cm x
+                 (z, cn') = reapply cn y
+             in (z, CacheComp cn' cm')
+    argument (CacheComp _ b) = argument b
+    result (CacheComp a _) = result a
 
 data Tree a = Leaf a
             | Node a [Tree a]
@@ -69,7 +71,7 @@ instance (Eq a) => Memo1 (Unfold a) where
     apply (Unfold f) a = let ra = rec a
                              cra = res ra
                          in (cra, CU f ra cra)
-        where rec a = case apply f a of
+        where rec aa = case apply f aa of
                         ([_], c) -> Leaf c
                         (bs, c) -> Node c (map rec bs)
               res = concatMap result . leaves
@@ -81,15 +83,15 @@ instance (Eq a) => Memo1 (Unfold a) where
            else let c' = xrec c a'
                     rc' = res c'
                 in (rc', CU f c' rc')
-        where xrec (Leaf n) a' = case reapply n a' of
-                                   ([_], e) -> Leaf e
-                                   (bs, e) -> Node e (map rec bs)
-              xrec (Node n ns) a' = case reapply n a' of
-                                      ([_], e) -> Leaf e
-                                      (bs, e) -> Node e (zipWithThen xrec rec ns bs)
+        where xrec (Leaf n) a'' = case reapply n a'' of
+                                    ([_], e) -> Leaf e
+                                    (bs, e) -> Node e (map rec bs)
+              xrec (Node n ns) a'' = case reapply n a'' of
+                                       ([_], e) -> Leaf e
+                                       (bs, e) -> Node e (zipWithThen xrec rec ns bs)
               rec a = case apply f a of  -- same as above...
-                        ([_], c) -> Leaf c
-                        (bs, c) -> Node c (map rec bs)
+                        ([_], cc) -> Leaf cc
+                        (bs, cc) -> Node cc (map rec bs)
               res = concatMap result . leaves
     argument (CU _ c _) = argument (treeTop c)
     result (CU _ _ r) = r
@@ -97,8 +99,8 @@ instance (Eq a) => Memo1 (Unfold a) where
 -- How can the code duplication in Unfold's reapply method be avoided?
 
 zipWithThen f g as bs = rec as bs
-    where rec (a:as) (b:bs) = f a b : rec as bs
-          rec [] (b:bs) = g b : rec [] bs
+    where rec (a:as') (b:bs') = f a b : rec as' bs'
+          rec [] (b:bs') = g b : rec [] bs'
           rec _ [] = []
 
 
@@ -182,13 +184,17 @@ data Shuffle a k b = Shuffle { sKey :: a -> Maybe k
                              }
 
 {-
+reapply' :: ... -> (res, Bool {-hasChanged-}, cache)
+
+
+
 noch von der data trennen:
   o decomposition
   o test auf equal (hasChangedFrom??)
     dann koennen beliebige datentypen eigene timestamps mitkriegen
--}
 
-{- further instances of Memo1
+
+further instances of Memo1
  fold     [a] -> [a]
  map      [[a]] -> [[b]]
  foldz    zipper a -> b

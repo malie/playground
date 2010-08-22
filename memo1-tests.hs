@@ -12,18 +12,19 @@ testsMain = do
   let n = case args of 
             x:_ -> read x
             _ -> 100
-  -- mapM_ (runTest (stdArgs { maxSuccess = n })) tests1
+  mapM_ (runTest (stdArgs { maxSuccess = n })) tests1
   mapM_ (runTest (stdArgs { maxSuccess = n })) tests2
 runTest args = quickCheckWith args
 
 tests1 =
-    [ 
+    [ testComposition1
       -- eq1 tsortApply sort
     ]
 
 tests2 =
     [
-      eq12 apply1 reapply2
+      testComposition2
+      -- eq12 apply1 reapply2
     ]
 
 eq1 f g x = f x == g x
@@ -50,17 +51,22 @@ halves str = let (a,b) = splitAt (length str `div` 2) str
 
 
 
-mul3 :: Int -> Int
-mul3 x = trace ("*3 " ++ show x) (x*3)
-mul7mod10 x = trace ("*7m10 " ++ show x) $ x*7 `mod` 10
+cf :: Int -> (Int, Int)
+cf x = (2*x-1, x+1)
+cg (x,y) = (x, x+y, x+2*y+7)
 
-t1 = 
-    let (r1, c) = apply (Comp mul3 mul7mod10) 7
-        (r2, _) = reapply c 8
-        (r3, _) = reapply c 9
-        (r4, _) = reapply c 7
-        (r5, _) = reapply c 17
-    in print [r1, r2, r3, r4, r5]
+testComposition1 x =
+    let (r, _) = apply (Comp cg cf) x
+    in r == cg (cf x)
+
+testComposition2 :: Int -> [Int] -> Bool
+testComposition2 x ys =
+    let (r1, c) = apply (Comp cg cf) x
+        cn = foldl (\cc a-> snd (reapply cc a)) c ys
+        arg = head (reverse ys ++ [x])
+        res = result cn
+    in res == cg (cf arg)
+
 
 
 {-
