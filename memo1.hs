@@ -12,8 +12,8 @@ class Memo1 f where
     type Arg f
     type Res f
     data Cache f
-    apply :: f -> Arg f -> (Res f, Cache f)
-    reapply :: Cache f -> Arg f -> (Res f, Cache f)
+    apply :: f -> Arg f -> Cache f
+    reapply :: Cache f -> Arg f -> Cache f
     argument :: Cache f -> Arg f
     result :: Cache f -> Res f
     changed :: (Eq (Res f)) => Cache f -> Cache f -> Bool
@@ -23,9 +23,9 @@ instance (Eq a) => Memo1 (a->b) where
     type Arg (a->b) = a
     type Res (a->b) = b
     data Cache (a->b) = CacheFun (a->b) a b
-    apply f a = let b = f a in (b, CacheFun f a b)
+    apply f a = let b = f a in CacheFun f a b
     reapply (CacheFun f a b) a' = if a == a'
-                                  then (b, CacheFun f a b)
+                                  then CacheFun f a b
                                   else apply f a'
     argument (CacheFun _ a _) = a
     result (CacheFun _ _ b) = b
@@ -40,15 +40,15 @@ instance (Memo1 a, Memo1 b, Eq (Arg a), Eq (Arg b), Arg a ~ Res b)
     type Res (Comp a b) = Res a
     data Cache (Comp a b) = CacheComp (Cache a) (Cache b)
     apply (Comp n m) x =
-        let (y, cm) = apply m x
-            (z, cn) = apply n y
-        in (z, CacheComp cn cm)
+        let cm = apply m x
+            cn = apply n (result cm)
+        in CacheComp cn cm
     reapply cc@(CacheComp cn cm) x =
         if argument cm == x
-        then (result cn, cc)
-        else let (y, cm') = reapply cm x
-                 (z, cn') = reapply cn y
-             in (z, CacheComp cn' cm')
+        then cc
+        else let cm' = reapply cm x
+                 cn' = reapply cn (result cm')
+             in CacheComp cn' cm'
     argument (CacheComp _ b) = argument b
     result (CacheComp a _) = result a
 
@@ -70,28 +70,31 @@ instance (Eq a) => Memo1 (Unfold a) where
     data Cache (Unfold a) = CU (a->[a]) (Tree (Cache (a->[a]))) [a]
     apply (Unfold f) a = let ra = rec a
                              cra = res ra
-                         in (cra, CU f ra cra)
-        where rec aa = case apply f aa of
-                        ([_], c) -> Leaf c
-                        (bs, c) -> Node c (map rec bs)
+                         in CU f ra cra
+        where rec aa = let c = apply f aa 
+                       in case result c of
+                            [_] -> Leaf c
+                            bs  -> Node c (map rec bs)
               res = concatMap result . leaves
 
     reapply (CU f c r) a' =
         let ct = treeTop c
         in if argument ct == a'
-           then (r, CU f c r)
+           then CU f c r
            else let c' = xrec c a'
-                    rc' = res c'
-                in (rc', CU f c' rc')
-        where xrec (Leaf n) a'' = case reapply n a'' of
-                                    ([_], e) -> Leaf e
-                                    (bs, e) -> Node e (map rec bs)
-              xrec (Node n ns) a'' = case reapply n a'' of
-                                       ([_], e) -> Leaf e
-                                       (bs, e) -> Node e (zipWithThen xrec rec ns bs)
-              rec a = case apply f a of  -- same as above...
-                        ([_], cc) -> Leaf cc
-                        (bs, cc) -> Node cc (map rec bs)
+                in CU f c' (res c')
+        where xrec (Leaf n) a'' = let e = reapply n a''
+                                  in case result e of
+                                       [_] -> Leaf e
+                                       bs -> Node e (map rec bs)
+              xrec (Node n ns) a'' = let e = reapply n a''
+                                     in case result e of
+                                          [_] -> Leaf e
+                                          bs -> Node e (zipWithThen xrec rec ns bs)
+              rec a = let cc = apply f a  -- same as above...
+                      in case result cc of
+                           [_] -> Leaf cc
+                           bs -> Node cc (map rec bs)
               res = concatMap result . leaves
     argument (CU _ c _) = argument (treeTop c)
     result (CU _ _ r) = r

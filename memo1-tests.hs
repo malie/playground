@@ -12,19 +12,16 @@ testsMain = do
   let n = case args of 
             x:_ -> read x
             _ -> 100
-  mapM_ (runTest (stdArgs { maxSuccess = n })) tests1
-  mapM_ (runTest (stdArgs { maxSuccess = n })) tests2
-runTest args = quickCheckWith args
+  let s = (stdArgs { maxSuccess = n })
+  mapM_ ($s) tests
 
-tests1 =
-    [ testComposition1
-      -- eq1 tsortApply sort
-    ]
+qc t args = quickCheckWith args t
 
-tests2 =
-    [
-      testComposition2
-      -- eq12 apply1 reapply2
+tests =
+    [ qc testComposition1,
+      qc testComposition2,
+      -- qc $ eq1 tsortApply sort,
+      qc $ eq12 apply1 reapply2
     ]
 
 eq1 f g x = f x == g x
@@ -34,12 +31,12 @@ eq12 f g x y = f y == g x y
 elems a = map (\x->[x]) a
 
 apply1 :: String -> [String]
-apply1 x = fst $ apply (Unfold halves) x
+apply1 x = result $ apply (Unfold halves) x
 
 reapply2 :: String -> String -> [String]
-reapply2 x y = let (r, c) = apply (Unfold halves) x
-                   (rr, cc) = reapply c y
-               in rr
+reapply2 x y = let c = apply (Unfold halves) x
+                   cc = reapply c y
+               in result cc
 
 
 halves :: (Show a) => [a] -> [[a]]
@@ -56,16 +53,15 @@ cf x = (2*x-1, x+1)
 cg (x,y) = (x, x+y, x+2*y+7)
 
 testComposition1 x =
-    let (r, _) = apply (Comp cg cf) x
+    let r = result $ apply (Comp cg cf) x
     in r == cg (cf x)
 
 testComposition2 :: Int -> [Int] -> Bool
 testComposition2 x ys =
-    let (r1, c) = apply (Comp cg cf) x
-        cn = foldl (\cc a-> snd (reapply cc a)) c ys
+    let c = apply (Comp cg cf) x
+        cn = foldl (\cc a-> reapply cc a) c ys
         arg = head (reverse ys ++ [x])
-        res = result cn
-    in res == cg (cf arg)
+    in result cn == cg (cf arg)
 
 
 
