@@ -1,13 +1,15 @@
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE PatternGuards #-}
 module Memo1.Tests where
 
+import Control.Monad (liftM2)
 import Data.List(sort)
--- import Debug.Trace
+import Debug.Trace
 import Memo1
 import System.Environment(getArgs)
 import Test.QuickCheck
 
-testsMain = do
+main = do
   args <- getArgs
   let n = case args of 
             x:_ -> read x
@@ -20,9 +22,10 @@ qc t args = quickCheckWith args t
 tests =
     [ qc testComposition1,
       qc testComposition2,
-      qc (\x-> let a = x ++ [123] in tsortApply a == sort a),
       qc $ eq1 apply1 elems,
-      qc $ eq12 apply1 reapply2
+      qc $ eq12 apply1 reapply2,
+      qc (\x-> let a = x ++ [123] in tsortApply a == sort a),
+      qc tsortReapply
     ]
 
 eq1 f g x = f x == g x
@@ -94,3 +97,58 @@ merge (xs, ys) = Just (rec xs ys)
                                   EQ -> x : y : rec xs' ys'
                                   GT -> y : rec (x:xs') ys'
 
+
+-- tests: replace some elements, insert elements, delete elements
+--        combinations of the above
+
+data Edit a
+    = Insert Int (NonEmptyList a)
+    | Delete Int Int
+      deriving (Show, Eq)
+pos (Insert p _) = p
+pos (Delete p _) = p
+lenmod (Insert _ (NonEmpty ns)) = length ns
+lenmod (Delete _ n) = (-n)
+applyEdit xs (Insert x _) | x < 0 = undefined
+applyEdit xs (Insert p (NonEmpty ns)) = let (as,zs) = splitAt p xs
+                                        in as ++ ns ++ zs
+applyEdit xs (Delete p n) = let (as,zs) = splitAt p xs
+                            in as ++ (drop n zs)
+
+instance Arbitrary a => Arbitrary (Edit a) where
+    arbitrary = liftM2 Insert arbitrary arbitrary
+                {-frequency [(1, liftM2 Insert arbitrary arbitrary)
+                          --  ,(1, liftM2 Delete arbitrary (arbitrary `suchThat` (>0)))
+                          ]-}
+    shrink (Insert p ns) = [ Insert p ns' | ns' <- shrink ns]
+    shrink (Delete p n) = [ Delete p n' | n' <- shrink n]
+
+
+data TsortReapply a = TsortReapply [a] [Edit a]
+                    deriving (Show, Eq)
+numEdits (TsortReapply _ eds) = length eds
+
+instance Arbitrary a => Arbitrary (TsortReapply a) where
+    arbitrary = frequency [(1, g)  {-, (10, g `suchThat` ((>0).numEdits))-}]
+        where g = liftM2 TsortReapply arbitrary arbitrary -- `suchThat` validTSR
+    shrink (TsortReapply xs eds) = filter validTSR $
+                                     [ TsortReapply xs eds' | eds' <- shrink eds ]
+                                     ++ [ TsortReapply xs' eds | xs' <- shrink xs ]
+
+validTSR (TsortReapply as eds) = snd $ foldl ck (length as, True) eds
+    where ck (l, ok) ed | p <- pos ed = (l + lenmod ed, ok && p >= 0 && p <= l)
+
+
+tsortReapply :: TsortReapply Int -> Property
+tsortReapply t | trace ("\ntsortReapply " ++ show t ++ "\n") False = undefined
+tsortReapply t@(TsortReapply as eds) =
+    collect (length eds) $
+    let bs = apply (Fold2 merge) (elems as)
+        as' = foldl applyEdit as eds
+        cs = reapply bs (elems as')
+    in trace ("   " ++ show as ++ " <> " ++ show as') $
+         flatten (result cs) == sort as'
+
+{-
+
+-}

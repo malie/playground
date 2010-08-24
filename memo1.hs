@@ -5,8 +5,10 @@
 {-# LANGUAGE GADTs #-}
 
 {- Markus Liedl 2010-08-16 -}
-
 module Memo1 where
+
+import Data.List(isPrefixOf, isSuffixOf)
+import Debug.Trace
 
 class Memo1 f where
     type Arg f
@@ -122,33 +124,77 @@ instance (Eq a) => Memo1 (Map a b) where
 -- If function returns Just, both inputs get replaced by the result. If Nothing
 -- both inputs get reapplied to their other respective neighbours.
 data Fold2 a = Fold2 ((a, a) -> Maybe a)
-data F2 a = F2 [a] [a] [F2 a]
-instance (Eq a) => Memo1 (Fold2 a) where
+data F2 a = F2Node [a] [a] (F2 a, F2 a)
+          | F2Leaf [a] [a]
+instance (Eq a, Show a) => Memo1 (Fold2 a) where
     type Arg (Fold2 a) = [a]
     type Res (Fold2 a) = [a]
     data Cache (Fold2 a) = CacheFold2 ((a, a) -> Maybe a) (F2 a)
     apply (Fold2 f) as = CacheFold2 f (rec as)
-        where rec as = let (res, subs) =
-                               case as of
-                                 [] -> ([], [])
-                                 [a] -> ([a], [])
-                                 _ -> let (l,r) = splitMid as
-                                          (tl, tr) = (rec l, rec r)
-                                      in ( applr f (rs tl) (rs tr)
-                                         , [tl, tr] )
-                       in F2 as res subs
-              rs (F2 _ r _) = r
+        where rec as = case as of
+                         [] -> F2Leaf [] []
+                         [_] -> F2Leaf as as
+                         _ -> let (l,r) = splitMid as
+                                  (tl, tr) = (rec l, rec r)
+                              in F2Node as (applr f (rs tl) (rs tr)) (tl, tr)
+              rs (F2Node _ r _) = r
+              rs (F2Leaf _ r) = r
+    reapply (CacheFold2 f t) xs0 = CacheFold2 f (rre t xs0)
+        where rre c [] = F2Leaf [] []
+              rre c xs@[_] = F2Leaf xs xs
+              rre c@(F2Leaf as rs) xs | as == xs = c
+              rre (F2Leaf _ _) xs = rec xs
+              rre _ xs | trace (show xs) False = undefined
+              rre c@(F2Node as0 _ (l,r)) xs =
+                  case (args l `isPrefixOf` xs, args r `isSuffixOf` xs) of
+                    (False, False) -> editsOnBothSides l r xs
+                    (True, False) -> noEditsLeft l r xs
+                    (False, True) -> noEditsRight l r xs
+                    (True, True) ->
+                        let lxs = length xs
+                            las0 = length as0
+                            lar = length (args r)
+                            lal = length (args l)
+                        in case (compare lxs las0, (compare lal lar, lal >= lxs, lar >= lxs)) of
+                             (EQ, _) -> trace "exactly same input" c -- exactly same input
+                             (GT, _) -> -- new elements inserted exactly between the halves
+                                        noEditsLeft l r xs -- arbitrarily keep left side
+                             {-(LT, (GT, True, _)) -> trace "add new right" (noEditsLeft l r xs)
+                             (LT, (LT, _, True)) -> trace "add new left" (noEditsRight l r xs)
+                             (LT, (_, True, _)) -> trace "add new right" (noEditsLeft l r xs)
+                             (LT, (_, _, True)) -> trace "add new left" (noEditsRight l r xs)-}
+                             _ -> rec xs
+              editsOnBothSides l r xs = let (xsl, xsr) = splitMid xs -- better split point possible?
+                                            (tl, tr) = (rre l xsl, rre r xsr)
+                                        in F2Node xs (applr f (rs tl) (rs tr)) (tl, tr)
+              noEditsLeft l r xs = let (_, xsr) = splitAt (length $ args l) xs
+                                       (tl, tr) = (l, rre r xsr)
+                                   in F2Node xs (applr f (rs tl) (rs tr)) (tl, tr)
+              noEditsRight l r xs = let (xsl, _) = splitAt (length xs - length (args r)) xs
+                                        (tl, tr) = (rre l xsl, r)
+                                   in F2Node xs (applr f (rs tl) (rs tr)) (tl, tr)
 
-        -- ganze liste als root des trees
-        -- beim reapply testen, ob alles gleich, wenn ja, cache result
-        -- wenn nicht, zwei teile bilden, nur die geaenderten teile neu bearbeiten
+              args (F2Leaf as _) = as
+              args (F2Node as _ _) = as
+              rs (F2Node _ r _) = r
+              rs (F2Leaf _ r) = r
+              rec as = case as of -- REP!
+                         [] -> F2Leaf [] []
+                         [_] -> F2Leaf as as
+                         _ -> let (l,r) = splitMid as
+                                  (tl, tr) = (rec l, rec r)
+                              in F2Node as (applr f (rs tl) (rs tr)) (tl, tr)
 
-    reapply = undefined
-    argument (CacheFold2 _ (F2 a _ _)) = a
-    result (CacheFold2 _ (F2 _ r _)) = r
+    argument (CacheFold2 _ (F2Node a _ _)) = a
+    argument (CacheFold2 _ (F2Leaf a _)) = a
+    result (CacheFold2 _ (F2Node _ r _)) = r
+    result (CacheFold2 _ (F2Leaf _ r)) = r
 
 -- apply f via a specialized list zipper
-applr :: ((a, a) -> Maybe a) -> [a] -> [a] -> [a]
+applr :: (Show a) => ((a, a) -> Maybe a) -> [a] -> [a] -> [a]
+applr f as bs | trace ("  applr " ++ show as ++ " " ++ show bs) False = undefined
+applr _ as [] = as
+applr _ [] bs = bs
 applr f as bs = let (x:ras) = reverse as
                 in r ras x bs
     where l (a:as) x bs = case f (a, x) of
