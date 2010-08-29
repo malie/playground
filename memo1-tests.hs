@@ -20,12 +20,12 @@ main = do
 qc t args = quickCheckWith args t
 
 tests =
-    [ -- qc testComposition1
-    -- , qc testComposition2
-    -- , qc $ eq1 apply1 elems
-    -- , qc $ eq12 apply1 reapply2
-    -- , qc (\x-> let a = x ++ [123] in tsortApply a == sort a)
-     qc tsortReapply
+    [ qc testComposition1
+    , qc testComposition2
+    , qc $ eq1 apply1 elems
+    , qc $ eq12 apply1 reapply2
+    , qc (\x-> let a = x ++ [123] in tsortApply a == sort a)
+    , qc tsortReapply
     ]
 
 eq1 f g x = f x == g x
