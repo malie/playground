@@ -2,7 +2,7 @@
 {-# LANGUAGE PatternGuards #-}
 module Memo1.Tests where
 
-import Control.Monad (liftM2)
+import Control.Monad (liftM, liftM2)
 import Data.List(sort)
 import Debug.Trace
 import Memo1
@@ -20,12 +20,12 @@ main = do
 qc t args = quickCheckWith args t
 
 tests =
-    [ qc testComposition1,
-      qc testComposition2,
-      qc $ eq1 apply1 elems,
-      qc $ eq12 apply1 reapply2,
-      qc (\x-> let a = x ++ [123] in tsortApply a == sort a),
-      qc tsortReapply
+    [ -- qc testComposition1
+    -- , qc testComposition2
+    -- , qc $ eq1 apply1 elems
+    -- , qc $ eq12 apply1 reapply2
+    -- , qc (\x-> let a = x ++ [123] in tsortApply a == sort a)
+     qc tsortReapply
     ]
 
 eq1 f g x = f x == g x
@@ -102,24 +102,24 @@ merge (xs, ys) = Just (rec xs ys)
 --        combinations of the above
 
 data Edit a
-    = Insert Int (NonEmptyList a)
+    = Insert Int [a]
     | Delete Int Int
       deriving (Show, Eq)
 pos (Insert p _) = p
 pos (Delete p _) = p
-lenmod (Insert _ (NonEmpty ns)) = length ns
+lenmod (Insert _ ns) = length ns
 lenmod (Delete _ n) = (-n)
 applyEdit xs (Insert x _) | x < 0 = undefined
-applyEdit xs (Insert p (NonEmpty ns)) = let (as,zs) = splitAt p xs
+applyEdit xs (Insert p ns) = let (as,zs) = splitAt p xs
                                         in as ++ ns ++ zs
 applyEdit xs (Delete p n) = let (as,zs) = splitAt p xs
                             in as ++ (drop n zs)
 
+positiveArbitrary = arbitrary `suchThat` (>0)
+
 instance Arbitrary a => Arbitrary (Edit a) where
-    arbitrary = liftM2 Insert arbitrary arbitrary
-                {-frequency [(1, liftM2 Insert arbitrary arbitrary)
-                          --  ,(1, liftM2 Delete arbitrary (arbitrary `suchThat` (>0)))
-                          ]-}
+    arbitrary = frequency [(1, liftM2 Insert positiveArbitrary arbitrary)
+                          ,(1, liftM2 Delete positiveArbitrary positiveArbitrary)]
     shrink (Insert p ns) = [ Insert p ns' | ns' <- shrink ns]
     shrink (Delete p n) = [ Delete p n' | n' <- shrink n]
 
@@ -128,26 +128,39 @@ data TsortReapply a = TsortReapply [a] [Edit a]
                     deriving (Show, Eq)
 numEdits (TsortReapply _ eds) = length eds
 
-instance Arbitrary a => Arbitrary (TsortReapply a) where
-    arbitrary = frequency [(1, g)  {-, (10, g `suchThat` ((>0).numEdits))-}]
-        where g = liftM2 TsortReapply arbitrary arbitrary -- `suchThat` validTSR
-    shrink (TsortReapply xs eds) = filter validTSR $
-                                     [ TsortReapply xs eds' | eds' <- shrink eds ]
-                                     ++ [ TsortReapply xs' eds | xs' <- shrink xs ]
+instance (Arbitrary a, Show a) => Arbitrary (TsortReapply a) where
+    arbitrary = do Positive len <- liftM (`mod` 300) arbitrary
+                   str <- mapM (const arbitrary) [1::Int .. len]
+                   Positive nEds <- liftM (`mod` 10) arbitrary
+                   eds <- mapM (const arbitrary) [1::Int .. nEds] -- `suchThat` validEds len
+                   return $ TsortReapply str eds
+    shrink (TsortReapply xs eds) = [ TsortReapply xs eds' | eds' <- shrink eds ]
+                                   ++ [ TsortReapply xs' eds | xs' <- shrink xs ]
 
-validTSR (TsortReapply as eds) = snd $ foldl ck (length as, True) eds
+validEds len (NonEmpty eds) | trace ("validEds " ++ show len ++ " " ++ show eds)  False = undefined
+validEds len (NonEmpty eds) = snd $ foldl ck (len, True) eds
     where ck (l, ok) ed | p <- pos ed = (l + lenmod ed, ok && p >= 0 && p <= l)
 
+-- tmerge i@(_,_) | trace (" x " ++ show i) False = undefined
+tmerge x = merge x
 
 tsortReapply :: TsortReapply Int -> Property
-tsortReapply t | trace ("\ntsortReapply " ++ show t ++ "\n") False = undefined
+-- tsortReapply t | trace ("\ntsortReapply " ++ show t ++ "\n") False = undefined
 tsortReapply t@(TsortReapply as eds) =
-    collect (length eds) $
-    let bs = apply (Fold2 merge) (elems as)
-        as' = foldl applyEdit as eds
-        cs = reapply bs (elems as')
-    in trace ("   " ++ show as ++ " <> " ++ show as') $
-         flatten (result cs) == sort as'
+    let as' = take 300 $ foldl applyEdit as eds
+    in collect (order as, order as', order eds) $
+    let bs = apply (Fold2 tmerge) (elems as)
+    in -- trace ("\n==================================================\nAPPLY " ++ show eds ++ " " ++ show as) $
+       -- trace (show (result bs)) $
+       let 
+           cs = reapply bs (elems as')
+       in -- trace "\n REAPPLY" $
+          -- trace (show (result cs)) $
+                  -- trace ("   " ++ show as ++ " <> " ++ show as') $
+                  flatten (result cs) == sort as'
+
+order :: [a] -> Integer
+order = round . (log::Double->Double) . fromInteger . toInteger . length
 
 {-
 

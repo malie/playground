@@ -54,6 +54,8 @@ instance (Memo1 a, Memo1 b, Eq (Arg a), Eq (Arg b), Arg a ~ Res b)
     argument (CacheComp _ b) = argument b
     result (CacheComp a _) = result a
 
+
+
 data Tree a = Leaf a
             | Node a [Tree a]
 treeTop (Leaf a) = a
@@ -144,7 +146,6 @@ instance (Eq a, Show a) => Memo1 (Fold2 a) where
               rre c xs@[_] = F2Leaf xs xs
               rre c@(F2Leaf as rs) xs | as == xs = c
               rre (F2Leaf _ _) xs = rec xs
-              rre _ xs | trace (show xs) False = undefined
               rre c@(F2Node as0 _ (l,r)) xs =
                   case (args l `isPrefixOf` xs, args r `isSuffixOf` xs) of
                     (False, False) -> editsOnBothSides l r xs
@@ -155,14 +156,10 @@ instance (Eq a, Show a) => Memo1 (Fold2 a) where
                             las0 = length as0
                             lar = length (args r)
                             lal = length (args l)
-                        in case (compare lxs las0, (compare lal lar, lal >= lxs, lar >= lxs)) of
-                             (EQ, _) -> trace "exactly same input" c -- exactly same input
-                             (GT, _) -> -- new elements inserted exactly between the halves
-                                        noEditsLeft l r xs -- arbitrarily keep left side
-                             {-(LT, (GT, True, _)) -> trace "add new right" (noEditsLeft l r xs)
-                             (LT, (LT, _, True)) -> trace "add new left" (noEditsRight l r xs)
-                             (LT, (_, True, _)) -> trace "add new right" (noEditsLeft l r xs)
-                             (LT, (_, _, True)) -> trace "add new left" (noEditsRight l r xs)-}
+                        in case (compare lxs las0) of
+                             EQ -> c -- exactly same input
+                             GT -> -- new elements inserted exactly between the halves
+                                   trace " between" (noEditsLeft l r xs) -- arbitrarily keep left side
                              _ -> rec xs
               editsOnBothSides l r xs = let (xsl, xsr) = splitMid xs -- better split point possible?
                                             (tl, tr) = (rre l xsl, rre r xsr)
@@ -192,7 +189,7 @@ instance (Eq a, Show a) => Memo1 (Fold2 a) where
 
 -- apply f via a specialized list zipper
 applr :: (Show a) => ((a, a) -> Maybe a) -> [a] -> [a] -> [a]
-applr f as bs | trace ("  applr " ++ show as ++ " " ++ show bs) False = undefined
+-- applr f as bs | trace ("  applr " ++ show as ++ " " ++ show bs) False = undefined
 applr _ as [] = as
 applr _ [] bs = bs
 applr f as bs = let (x:ras) = reverse as
@@ -240,7 +237,7 @@ further instances of Memo1
  fix      a -> Maybe a    // apply till no more changes
 
 examples of incremental computation:
-  incremental sorting
+  x incremental sorting
   sum of a list of numbers given as a space separated string
   parse and type check a simple language (literal numbers, arithmetic, variables, assignment)
   strictnes analysis ???
