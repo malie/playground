@@ -1,9 +1,11 @@
 {-# OPTIONS_GHC -fglasgow-exts #-}
+{-# LANGUAGE PackageImports #-}
 import Data.Generics
 import qualified Data.Generics.Uniplate.Data as Uniplate
-import Control.Monad.State.Lazy
+import "mtl" Control.Monad.State.Lazy
 import Text.PrettyPrint
 import Data.List
+import Debug.Trace(trace)
 
 class Pretty a where
     pretty :: a -> Doc
@@ -41,7 +43,7 @@ data Type
     | TFun Type Type
     | TVar Integer
     | TPrim String
-      deriving (Eq, Data, Typeable)
+      deriving (Eq, Data, Typeable, Show)
 
 instance Pretty Type where
     pretty TInteger = text "TInteger"
@@ -138,28 +140,41 @@ constraints = Uniplate.para f
 
 -- plai p.280
 solve :: [Constraint] -> [Constraint]
-solve cs = rec cs []
-    where rec :: [Constraint] -> [Constraint] -> [Constraint]
-          rec [] subst = subst
-          rec ((a, b):cs) subst =
-              case (a==b, varLeft a b, a, b) of
-                (True, _, _, _)
-                    -> rec cs subst
-                (_, (u@(TVar _), r), _, _)
-                    -> let substAll = Uniplate.transformBi $ substitute u r
-                       in rec (substAll cs) $ (u,r) : substAll subst
-                (_, _, TFun rf ra, TFun sf sa)
-                    -> rec ((rf,sf):(ra,sa):cs) subst
+solve cs = (xrec cs [])
+    where xrec :: [Constraint] -> [Constraint] -> [Constraint]
+          xrec [] subst = subst
+          xrec (t@(_,_):_) subst | trace ("\n" ++ show t ++ "\n" ++ show subst ++ "\n") False = undefined
+          xrec ((a, b):cs) subst | a == b = xrec cs subst
+          xrec ((a, b):cs) subst =
+              case (varLeft a b, a, b) of
+                ((u@(TVar _), r), _, _)
+                    -> let su = substituteAll u r
+                       in xrec (su cs) $ (u,r) : su subst
+                (_, TFun rf ra, TFun sf sa)
+                    -> xrec ((rf,sf):(ra,sa):cs) subst
           varLeft a b@(TVar _) = (b,a)
           varLeft a b          = (a,b)
-          substitute :: Type -> Type -> Type -> Type
-          substitute (TVar u) r (TVar v) | u == v = r
-          substitute _ _ x                        = x
+
+class SubstituteAll a where
+    substituteAll :: Type -> Type -> a -> a
+
+instance SubstituteAll Type where
+    substituteAll u r = Uniplate.transform $ substitute u r
+
+instance SubstituteAll Constraint where
+    substituteAll u r = Uniplate.transformBi $ substitute u r
+
+substitute :: Type -> Type -> Type -> Type
+substitute (TVar u) r (TVar v) | u == v = r
+substitute _ _ x                        = x
+
+instance SubstituteAll a => SubstituteAll [a] where
+    substituteAll u r = map (substituteAll u r)
 
 
 
 
-p1, p2, p3, p4 :: S
+p1, p2, p3, p4 :: SE
 (p1, p2, p3, p4) =
     let i = SE . SLiteral . VInteger
         a f x = SE (SApply f x)
@@ -188,5 +203,4 @@ main = do
   pprint c
   let r = solve c
   pprint r
-
 
