@@ -1,5 +1,6 @@
 {-# OPTIONS_GHC -fglasgow-exts #-}
 {-# LANGUAGE PackageImports #-}
+{-# LANGUAGE DeriveFunctor #-}
 import Data.Generics
 import qualified Data.Generics.Uniplate.Data as Uniplate
 import "mtl" Control.Monad.State.Lazy
@@ -11,7 +12,14 @@ class Pretty a where
     pretty :: a -> Doc
 
 pprint :: Pretty a => a -> IO ()
-pprint = putStrLn . show . pretty
+pprint = putStrLn . showPretty
+
+showPretty :: Pretty a => a -> String
+showPretty = show . pretty
+
+instance Pretty a => Pretty [a] where
+   pretty l = brackets $ nest 2 $ sep $ map (<> comma) $ map pretty l
+
 
 type Name = String
 
@@ -23,7 +31,7 @@ data Expr t
     | SLet { sletNamedExprs :: NamedExprs t
            , sletBody :: t }
     | SPrim Primitive
-      deriving (Data, Typeable)
+      deriving (Data, Typeable, Functor)
 
 instance Pretty t => Pretty (Expr t) where
     pretty (SLiteral l) = parens $ sep [text "SLiteral", pretty l]
@@ -77,7 +85,7 @@ data TIExpr
       deriving (Data, Typeable)
 
 instance Pretty TIExpr where
-    pretty (TIType t e) = sep [pretty e, nest 1 $ sep [text "::", pretty t]]
+    pretty (TIType t e) = sep [pretty t, pretty e]
     pretty (TITypeUnknown e) = parens $ sep [text "TITypeUnknown", pretty e]
 
 
@@ -90,20 +98,15 @@ primitives =
       ]
 
 enterType :: SE -> TIExpr
-enterType (SE (SLambda nm a)) = TITypeUnknown (SLambda nm (enterType a))
-enterType (SE (SApply a b))   = TITypeUnknown (SApply (enterType a) (enterType b))
-enterType (SE (SLet vs b))    = TITypeUnknown (SLet (map (\(nm, x) -> (nm, enterType x)) vs) (enterType b))
-enterType (SE (SLiteral x))   = TITypeUnknown (SLiteral x)
-enterType (SE (SVar x))       = TITypeUnknown (SVar x)
-enterType (SE (SPrim x))      = TITypeUnknown (SPrim x)
+enterType (SE x) = TITypeUnknown (fmap enterType x)
+
 
 numerate :: TIExpr -> TIExpr
 numerate e = fst $ runState (num [] e) 0
     where num env (TITypeUnknown (SLambda nm b)) =
               do n <- gen
-                 let nmt = TVar n
-                 b'@(TIType bt _) <- num ((nm, nmt):env) b
-                 return (TIType (TFun nmt bt) (SLambda nm b'))
+                 b'@(TIType bt _) <- num ((nm, TVar n):env) b
+                 return (TIType (TFun (TVar n) bt) (SLambda nm b'))
           num env (TITypeUnknown x@(SVar nm)) =
               case lookup nm env of
                 Just t -> return $ TIType t x
@@ -120,12 +123,10 @@ numerate e = fst $ runState (num [] e) 0
                    return n
 
 
+-- Equality constraint
 type Constraint = (Type, Type)
 instance Pretty Constraint where
     pretty (a,b) = sep [pretty a, text "=" <+> pretty b]
-
-instance Pretty [Constraint] where  -- why?
-    pretty l = brackets $ nest 2 $ sep $ map (<> comma) $ map pretty l
 
 constraints :: TIExpr -> [Constraint]
 constraints = Uniplate.para f
@@ -143,39 +144,44 @@ solve :: [Constraint] -> [Constraint]
 solve cs = (xrec cs [])
     where xrec :: [Constraint] -> [Constraint] -> [Constraint]
           xrec [] subst = subst
-          xrec (t@(_,_):_) subst | trace ("\n" ++ show t ++ "\n" ++ show subst ++ "\n") False = undefined
+          xrec (t@(_,_):_) subst | trace ("\n" ++ showPretty t) False = undefined
           xrec ((a, b):cs) subst | a == b = xrec cs subst
           xrec ((a, b):cs) subst =
               case (varLeft a b, a, b) of
                 ((u@(TVar _), r), _, _)
-                    -> let su = substituteAll u r
-                       in xrec (su cs) $ (u,r) : su subst
+                    -> let su = substitute u r
+                           subst' = (u,r) : su subst
+                       in trace ("new subst:\n " ++ showPretty subst') $
+                                xrec (su cs) $ subst'
                 (_, TFun rf ra, TFun sf sa)
                     -> xrec ((rf,sf):(ra,sa):cs) subst
           varLeft a b@(TVar _) = (b,a)
           varLeft a b          = (a,b)
 
-class SubstituteAll a where
-    substituteAll :: Type -> Type -> a -> a
+class Substitute a b where
+    substitute :: a -> a -> b -> b
 
-instance SubstituteAll Type where
-    substituteAll u r = Uniplate.transform $ substitute u r
+instance Substitute Type Type where
+    substitute u r = Uniplate.transform $ substitute' u r
 
-instance SubstituteAll Constraint where
-    substituteAll u r = Uniplate.transformBi $ substitute u r
+instance Substitute Type Constraint where
+    substitute u r = Uniplate.transformBi $ substitute' u r
 
-substitute :: Type -> Type -> Type -> Type
-substitute (TVar u) r (TVar v) | u == v = r
-substitute _ _ x                        = x
+instance Substitute Type TIExpr where
+    substitute u r = Uniplate.transformBi $ substitute' u r
 
-instance SubstituteAll a => SubstituteAll [a] where
-    substituteAll u r = map (substituteAll u r)
+substitute' :: Type -> Type -> Type -> Type
+substitute' (TVar u) r (TVar v) | u == v = r
+substitute' _ _ x                        = x
+
+instance Substitute a b => Substitute a [b] where
+    substitute u r = map (substitute u r)
 
 
 
 
-p1, p2, p3, p4 :: SE
-(p1, p2, p3, p4) =
+p1, p2, p3, p4, p5 :: SE
+(p1, p2, p3, p4, p5) =
     let i = SE . SLiteral . VInteger
         a f x = SE (SApply f x)
         a2 f x y = a (a f x) y
@@ -189,6 +195,7 @@ p1, p2, p3, p4 :: SE
            (a2 (v "g")
                (v "a")
                (a2 (v "g") (v "a") (v "b")))))
+       , fn "f" (fn "g" (fn "x" (a (v "f") (a (v "g") (v "x")))))
        )
 
 -- f g a b = g a (g a b)
@@ -196,11 +203,15 @@ p1, p2, p3, p4 :: SE
 -- fold
 
 main = do
-  let et = enterType p4
+  let x = p5
+  pprint x
+  let et = enterType x
+  pprint et
   let o = numerate et
   pprint o
   let c = constraints o
   pprint c
   let r = solve c
   pprint r
-
+  let res = foldr (uncurry substitute) o r
+  pprint res
