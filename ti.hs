@@ -34,21 +34,37 @@ type TypeVarName = String  -- lower case polymorphic type variable
 data TopLevel t
     = TLDef Name t
     | TLData TypeName TypeContext [DataConstr]
-
-instance Pretty t => Pretty (TopLevel t) where
-    pretty (TLDef nm e) = sep [ text nm <+> text "=" , nest 2 $ pretty e]
+      deriving (Data, Typeable)
 
 data TypeContext = TCTypes [TypeName]
+                   deriving (Data, Typeable)
 
 type DataConstrName = String
 data DataConstr = DataConstr DataConstrName TypeArgs
+                  deriving (Data, Typeable)
 
 type TypeArgs = [TypeArg]
 data TypeArg
     = TAType TypeVarName
     | TATypeConstr TypeName TypeArgs
+      deriving (Data, Typeable)
 
 
+instance Pretty t => Pretty (TopLevel t) where
+    pretty (TLDef nm e) = sep [ text nm <+> text "=" , nest 2 $ pretty e]
+    pretty (TLData tn tc cs) = sep [ text "data" <+> text tn <+> pretty tc,
+                                     nest 2 $ sep $ zipWith con cs ("=" : repeat "|")]
+        where con c prefix = text prefix <+> pretty c
+
+instance Pretty TypeContext where
+    pretty (TCTypes ns) = sep $ map text ns
+
+instance Pretty DataConstr where
+    pretty (DataConstr dcnm ta) = sep (text dcnm : map (parens.pretty) ta)
+
+instance Pretty TypeArg where
+    pretty (TAType tvn) = text tvn
+    pretty (TATypeConstr tn tas) = sep (text tn : map pretty tas)
 
 type Name = String
 
@@ -96,15 +112,26 @@ data Type
     = TInteger
     | TBoolean
     | TFun Type Type
+    | TApp Type Type
     | TVar Integer
+    | TName TypeName
+    | TArg TypeName
     | TPrim String
       deriving (Eq, Data, Typeable, Show)
 
 instance Pretty Type where
     pretty TInteger = text "TInteger"
     pretty TBoolean = text "TBoolean"
-    pretty (TFun f a) = parens $ sep [pretty f, text "->", pretty a]
+    pretty a@(TFun _ _) = parens $ sep $ link $ map pretty $ arrow a
+        where arrow (TFun f a) = f : arrow a
+              arrow a          = [a]
+              link (a:as) = a : map (nest 2 . (text "->" <+>) . parens) as
+    pretty (TApp f a) = sep [ text $ "TApp "
+                            , nest 2 $ parens $ pretty f
+                            , nest 2 $ parens $ pretty a]
     pretty (TVar n) = text $ "TVar " ++ show n
+    pretty (TName n) = text $ "TName " ++ show n
+    pretty (TArg n) = text $ "TArg " ++ show n
     pretty (TPrim nm) = text $ "TPrim " ++ nm
 
 
@@ -146,15 +173,28 @@ primitives =
 
 data TITopLevel
     = TITopLevel Type (TopLevel TIExpr)
+    | TIDataConstructor DataConstrName Type
     | TITopLevelUnknown (TopLevel TIExpr)
+      deriving (Data, Typeable)
 instance Pretty TITopLevel where
     pretty (TITopLevelUnknown e) = pretty e
     pretty (TITopLevel t e@(TLDef nm _)) = sep [ text nm <+> text "::" <+> pretty t
                                                , pretty e]
+    pretty (TIDataConstructor nm t) = sep [text nm <+> text "::", nest 2 $ pretty t]
 
 enterType :: [TopLevel SE] -> [TITopLevel]
-enterType ts = map tl ts
-    where tl (TLDef nm x) = TITopLevelUnknown $ TLDef nm $ expr x
+enterType ts = concatMap tl ts
+    where tl (TLDef nm x) = [TITopLevelUnknown $ TLDef nm $ expr x]
+          tl (TLData tn (TCTypes tvars) dcs) = map dataCons dcs
+              where dataCons (DataConstr dcn tas) = TIDataConstructor dcn $ typeFuns tas dataType
+                    typeArg (TAType tvn) = TArg tvn
+                    typeArg (TATypeConstr tn tas) = typeApps (TName tn) tas
+                    -- foldr (flip . TFun) dataType (map typeArg tas)
+                    typeFuns [] dt = dt
+                    typeFuns (a:as) dt = TFun (typeArg a) (typeFuns as dt)
+                    typeApps dt [] = dt
+                    typeApps dt (a:as) = TApp (typeApps dt as) (typeArg a)
+                    dataType = foldl TApp (TName tn) (map TArg tvars)
           expr (SE x) = TITypeUnknown $ fmap expr x
 
 numerate :: [TITopLevel] -> [TITopLevel]
@@ -162,6 +202,7 @@ numerate ts = fst $ runState (mapM numtl ts) 0
     where numtl (TITopLevelUnknown (TLDef nm x)) = do tn <- gen
                                                       liftM (TITopLevel (TVar tn) . TLDef nm)
                                                             (num [] x)
+          numtl x = return x
           num env (TITypeUnknown (SLambda nm b)) =
               do n <- gen
                  b'@(TIType bt _) <- num ((nm, TVar n):env) b
@@ -194,56 +235,56 @@ instance Pretty Constraint where
 
 constraints :: [TITopLevel] -> [Constraint]
 constraints ts = concatMap pt ts
-    where globals = concatMap gl ts
+    where globals = trace ("globals:\n " ++ show globals') globals'
+          globals' = concatMap gl ts
           gl (TITopLevel t (TLDef nm _)) = [(nm, t)]
+          gl (TIDataConstructor nm t) = [(nm, t)]
           pt (TITopLevel t1 (TLDef _ e@(TIType t2 _))) = Equal t1 t2 : Uniplate.para f e
+          pt (TIDataConstructor _ _) = []
           f :: TIExpr -> [[Constraint]] -> [Constraint]
           f (TIType t (SLiteral (VInteger _))) = c (Equal t TInteger)
           f (TIType t (SLiteral (VBoolean _))) = c (Equal t TBoolean)
           f (TIType t (SApply (TIType tf _) (TIType ta _))) = c (Equal tf $ TFun ta t)
           f (TIType t (SVar nm)) | Just gt <- lookup nm globals = c (InstanceOf t gt)
+          f (TIType t (SCons _ nm)) | Just gt <- lookup nm globals = c (InstanceOf t gt)
           f _ = concat
           c a b = a : concat b
 
+data SubstDel
+    = SubstDel { sdSubstitutions :: [Constraint]
+               , sdDelayed :: [Constraint]}
+
+instance Pretty SubstDel where
+    pretty (SubstDel s d) = parens $ sep [text "SubstDel", nest 2 $ sep [pretty s, pretty d]]
+
+insertSubstitution u r (SubstDel subst del) = let su = substitute u r
+                                              in SubstDel (Equal u r : su subst) (su del)
+insertDelayed d (SubstDel subst del) = SubstDel subst (d:del)
+
 -- plai p.280
 solve :: [Constraint] -> [Constraint]
-solve cs = (xrec cs ([],[]))
-    where xrec :: [Constraint] -> ([Constraint], [Constraint]) -> [Constraint]
-          xrec [] (subst, del) = subst ++ del
+solve cs = (xrec cs (SubstDel [] []))
+    where xrec :: [Constraint] -> SubstDel -> [Constraint]
+          xrec [] (SubstDel subst del) = subst ++ del
           xrec (co:_) sd | trace ("\n" ++ showPretty sd) False = undefined
-          xrec (i@(InstanceOf _ _):cs) (subst, del) = xrec cs (subst, i:del)
+          xrec (io@(InstanceOf _ _):cs) sd = xrec cs $ insertDelayed io sd
           xrec (Equal a b:cs) sd | a == b = xrec cs sd
-          xrec (Equal a b:cs) (subst, del) =
-              case (varLeft a b, a, b) of
-                ((u@(TVar _), r), _, _)
-                    -> let su = substitute u r
-                           subst' = Equal u r : su subst
-                       in trace ("new subst:\n " ++ showPretty subst') $
-                                xrec (su cs) $ (subst', su del)
-                (_, TFun rf ra, TFun sf sa)
-                    -> xrec (Equal rf sf : Equal ra sa : cs) (subst, del)
+          xrec (Equal a b:cs) sd | (u@(TVar _), r) <- varLeft a b
+                                 = xrec (substitute u r cs) $ insertSubstitution u r sd
+          xrec (Equal (TFun rf ra) (TFun sf sa) : cs) sd
+                                 = xrec (Equal rf sf : Equal ra sa : cs) sd
           varLeft a b@(TVar _) = (b,a)
           varLeft a b          = (a,b)
 
-class Substitute a b where
-    substitute :: a -> a -> b -> b
+substitute :: (Data a) => Type -> Type -> a -> a
+substitute u r = Uniplate.transformBi $ f u r
+    where f :: Type -> Type -> Type -> Type
+          f (TVar u) r (TVar v) | u == v = r
+          f _ _ x                        = x
 
-instance Substitute Type Type where
-    substitute u r = Uniplate.transform $ substitute' u r
-
-instance Substitute Type Constraint where
-    substitute u r = Uniplate.transformBi $ substitute' u r
-
-instance Substitute Type TIExpr where
-    substitute u r = Uniplate.transformBi $ substitute' u r
-
-substitute' :: Type -> Type -> Type -> Type
-substitute' (TVar u) r (TVar v) | u == v = r
-substitute' _ _ x                        = x
-
-instance Substitute a b => Substitute a [b] where
-    substitute u r = map (substitute u r)
-
+substituteEquals :: Constraint -> [TITopLevel] -> [TITopLevel]
+substituteEquals (Equal a b) tl = map (substitute a b) tl
+substituteEquals (InstanceOf _ _) tl = tl
 
 prelude =
     [ TLData "List" (TCTypes ["a"])
@@ -268,8 +309,8 @@ progs =
                         (a2 (v "g") (v "a") (v "b")))]
        , prelude ++
          [TLDef "map" $ fn "f" $ fn "l" $
-                cas (v "l") [(PCons "cons" ["hd", "tl"]
-                             , a2 (cons 2 "cons")
+                cas (v "l") [(PCons "Cons" ["hd", "tl"]
+                             , a2 (cons 2 "Cons")
                                   (a (v "f") (v "hd"))
                                   (v "tl"))]]
        ]
@@ -279,7 +320,7 @@ progs =
 -- fold
 
 main = do
-  let x = progs !! 1
+  let x = progs !! 3
   pprint x
   let et = enterType x
   pprint et
@@ -289,8 +330,5 @@ main = do
   pprint c
   let r = solve c
   pprint r
-  putStrLn "\n"
-  pprint r
-{-  let res = foldr (uncurry substitute) o r
+  let res = foldr substituteEquals o r
   pprint res
--}
