@@ -1,3 +1,5 @@
+{-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE OverlappingInstances #-}
 module Pretty
        ( Pretty
        , pretty
@@ -16,7 +18,10 @@ pprint :: Pretty a => a -> IO ()
 pprint = putStrLn . showPretty
 
 showPretty :: Pretty a => a -> String
-showPretty = show . pretty
+showPretty = renderStyle sty . pretty
+-- showPretty = show . pretty
+
+sty = style { lineLength = 171, ribbonsPerLine = 0.6 }
 
 instance Pretty a => Pretty [a] where
    pretty l = brackets $ nest 2 $ sep $ mapn1 (<> comma) $ map pretty l
@@ -39,3 +44,7 @@ instance Pretty Char where
 
 instance Pretty Int where
   pretty = text . show
+
+instance Pretty String where
+  pretty = quotes . text
+
