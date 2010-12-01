@@ -4,7 +4,7 @@ import Data.Generics
 import Data.Generics.Uniplate.Data
 import Data.List
 import qualified Data.Map as M
-import Data.Maybe ( mapMaybe , maybe )
+import Data.Maybe ( mapMaybe )
 import Debug.Trace
 
 import Pretty
@@ -243,14 +243,14 @@ fs rules = (pmap, pfold)
     p (MSeqr (x:xs)) (MSeq (y:ys)) =
                         case prec x y of
                           MNo -> MNo
-                          m@(MP _) -> mkseq (reverse xs ++ m : ys)
+                          m@(MP _) -> pSeqrSeq xs m ys
                           (MAlt as) -> mkalt (map f as)
-                                       where f a = mkseq (reverse xs ++ a : ys) -- CR cont rewrite
+                                       where f a = pSeqrSeq xs a ys
                           x -> error ("p_ss " ++ showPretty x)
                           
     p x (MSeq (y:ys)) = case prec x y of
                           MNo -> MNo
-                          m@(MP _) -> {-trace2 "p_s mp"-} mkseq (m:ys) -- CR right
+                          m@(MP _) -> pSeqrSeq [] m ys
                           MAlt as -> mkalt $ map (\a -> MSeq (a:ys)) as -- tedious
                                               -- ++ [mkseq2 x (MSeq (y:ys))]
                           -- MSeq rs -> mkseq2 (rs ys
@@ -258,11 +258,13 @@ fs rules = (pmap, pfold)
 
     p (MSeqr (x:xs)) y = case prec x y of
                            MNo -> MNo
-                           m@(MP _) -> {-trace2 "p_s mp"-} mkseq (reverse (m:xs)) -- CR left
+                           m@(MP _) -> pSeqrSeq xs m []
                            MAlt as -> mkalt $ map (\a -> MSeqr (a:xs)) as -- tedious
                                               -- ++ [mkseq2 x (MSeq (y:ys))]
                            -- MSeq rs -> mkseq2 (rs ys
                            x -> error ("p_sr " ++ showPretty x)
+
+    pSeqrSeq ls x rs = mkseq $ reverse ls ++ x : rs
 
 
     mkalt :: [Match] -> Match
@@ -333,4 +335,4 @@ main =
      pprint $ sort $ rules
      -- parse "123 abc  DefabcdxabcdghIJk  " rules
      -- parse "123 abc  Def  " rules
-     parse "   " rules
+     parse "    " rules
